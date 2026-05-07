@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func
+from sqlalchemy import func, text
 from flask_bcrypt import Bcrypt
 from datetime import datetime, timedelta
 from PIL import Image
@@ -10,6 +10,10 @@ import tensorflow as tf
 import io
 import os
 from werkzeug.utils import secure_filename
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -47,7 +51,7 @@ class User(db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=True)
     password_hash = db.Column(db.Text, nullable=False)
-    role = db.Column(db.Enum('user', 'doctor', 'admin', name='user_roles'), nullable=False, default='user')
+    role = db.Column(db.String(20), nullable=False, default='user')
     specialty = db.Column(db.String(100), nullable=True)
     clinic_name = db.Column(db.String(100), nullable=True)
     phone = db.Column(db.String(20), nullable=True)
@@ -205,20 +209,28 @@ def predict_disease(image):
     except Exception as e:
         raise ValueError(f"Error making prediction: {str(e)}")
 
+@app.route('/', methods=['GET'])
+def root():
+    """Root endpoint"""
+    return jsonify({
+        'status': 'ok',
+        'message': 'MedVision AI API is running',
+        'endpoints': {
+            'health': '/health',
+            'register': '/register',
+            'login': '/login'
+        }
+    })
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     db_status = False
     try:
-        db.session.execute(tf.raw_sql('SELECT 1')) # Using tf for raw sql if needed, but db.session.execute("SELECT 1") is better
+        db.session.execute(text('SELECT 1'))
         db_status = True
-    except:
-        try:
-            from sqlalchemy import text
-            db.session.execute(text('SELECT 1'))
-            db_status = True
-        except:
-            pass
+    except Exception as e:
+        print(f"Health check DB error: {str(e)}")
             
     return jsonify({
         'status': 'healthy',
