@@ -44,6 +44,34 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'medvision-secret-key-123')
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
 
+# Run schema maintenance on app startup
+with app.app_context():
+    # Schema Maintenance: Cleanup old enum type
+    try:
+        from sqlalchemy import text
+        # First, alter the role column to VARCHAR to be safe
+        db.session.execute(text("""
+            DO $$ 
+            BEGIN
+                IF EXISTS (SELECT 1 FROM information_schema.columns 
+                           WHERE table_name = 'users' AND column_name = 'role' 
+                           AND data_type = 'USER-DEFINED') THEN
+                    ALTER TABLE users ALTER COLUMN role TYPE VARCHAR(20) USING role::VARCHAR(20);
+                END IF;
+            END $$;
+        """))
+        # Drop the old enum type if it exists
+        db.session.execute(text("DROP TYPE IF EXISTS user_roles;"))
+        db.session.commit()
+        print("Old enum type cleaned up successfully!")
+    except Exception as e:
+        print(f"Schema maintenance notice (enum cleanup): {str(e)}")
+        db.session.rollback()
+    
+    # Now create all tables
+    db.create_all()
+    print("Database tables initialized!")
+
 # User Model
 class User(db.Model):
     __tablename__ = 'users'
@@ -1113,31 +1141,6 @@ def get_patient_report(patient_id):
 
 
 if __name__ == '__main__':
-    # Initialize the database
-    with app.app_context():
-        db.create_all()
-        print("Database tables initialized!")
-        
-        # Schema Maintenance: Cleanup removed columns if they exist
-        try:
-            from sqlalchemy import inspect, text
-            inspector = inspect(db.engine)
-            columns = [c['name'] for c in inspector.get_columns('patient_predictions')]
-            
-            if 'notes' in columns:
-                print("Removing 'notes' column from 'patient_predictions' table...")
-                db.session.execute(text("ALTER TABLE patient_predictions DROP COLUMN notes"))
-                db.session.commit()
-            
-            if 'validation' in columns:
-                print("Removing 'validation' column from 'patient_predictions' table...")
-                db.session.execute(text("ALTER TABLE patient_predictions DROP COLUMN validation"))
-                db.session.commit()
-                
-            print("Database schema synchronization complete.")
-        except Exception as e:
-            print(f"Schema maintenance notice: {str(e)}")
-
     # Load the model when starting the server
     if load_ml_model():
         print("Starting Flask server...")
