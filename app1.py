@@ -44,33 +44,93 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'medvision-secret-key-123')
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
 
-# Run schema maintenance on app startup
+# Run schema maintenance on app startup - COMPLETELY with raw SQL
 with app.app_context():
-    # Schema Maintenance: Cleanup old enum type
     try:
         from sqlalchemy import text
-        # First, alter the role column to VARCHAR to be safe
-        db.session.execute(text("""
-            DO $$ 
-            BEGIN
-                IF EXISTS (SELECT 1 FROM information_schema.columns 
-                           WHERE table_name = 'users' AND column_name = 'role' 
-                           AND data_type = 'USER-DEFINED') THEN
-                    ALTER TABLE users ALTER COLUMN role TYPE VARCHAR(20) USING role::VARCHAR(20);
-                END IF;
-            END $$;
-        """))
-        # Drop the old enum type if it exists
-        db.session.execute(text("DROP TYPE IF EXISTS user_roles;"))
+        print("=== Starting Database Initialization ===")
+        
+        # Step 1: Drop old enum type if it exists
+        print("Step 1: Dropping old enum type (if exists)...")
+        db.session.execute(text("DROP TYPE IF EXISTS user_roles CASCADE;"))
         db.session.commit()
-        print("Old enum type cleaned up successfully!")
+        print("✓ Old enum type dropped (if existed)")
+        
+        # Step 2: Create all tables using raw SQL (avoids SQLAlchemy enum issues)
+        print("Step 2: Creating tables using raw SQL...")
+        
+        # Users table
+        db.session.execute(text("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(80) UNIQUE NOT NULL,
+                email VARCHAR(120) UNIQUE,
+                password_hash TEXT NOT NULL,
+                role VARCHAR(20) NOT NULL DEFAULT 'user',
+                specialty VARCHAR(100),
+                clinic_name VARCHAR(100),
+                phone VARCHAR(20),
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login TIMESTAMP,
+                feedback TEXT
+            );
+        """))
+        
+        # Predictions table
+        db.session.execute(text("""
+            CREATE TABLE IF NOT EXISTS predictions (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                image_path TEXT NOT NULL,
+                disease VARCHAR(100) NOT NULL,
+                confidence FLOAT NOT NULL,
+                ai_description TEXT,
+                prevention_tips TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """))
+        
+        # Patients table
+        db.session.execute(text("""
+            CREATE TABLE IF NOT EXISTS patients (
+                id SERIAL PRIMARY KEY,
+                doctor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                patient_name VARCHAR(100) NOT NULL,
+                patient_age INTEGER NOT NULL,
+                patient_gender VARCHAR(10) NOT NULL,
+                contact VARCHAR(20),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """))
+        
+        # Patient predictions table
+        db.session.execute(text("""
+            CREATE TABLE IF NOT EXISTS patient_predictions (
+                id SERIAL PRIMARY KEY,
+                patient_id INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+                doctor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                image_path TEXT NOT NULL,
+                disease VARCHAR(100) NOT NULL,
+                confidence FLOAT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """))
+        
+        # Create indexes
+        db.session.execute(text("CREATE INDEX IF NOT EXISTS idx_patients_doctor_id ON patients(doctor_id);"))
+        db.session.execute(text("CREATE INDEX IF NOT EXISTS idx_predictions_patient_id ON patient_predictions(patient_id);"))
+        db.session.execute(text("CREATE INDEX IF NOT EXISTS idx_predictions_doctor_id ON patient_predictions(doctor_id);"))
+        
+        db.session.commit()
+        print("✓ All tables created/verified successfully!")
+        print("=== Database Initialization Complete ===")
+        
     except Exception as e:
-        print(f"Schema maintenance notice (enum cleanup): {str(e)}")
+        print(f"✗ ERROR during database initialization: {str(e)}")
+        import traceback
+        print(f"Stack trace: {traceback.format_exc()}")
         db.session.rollback()
-    
-    # Now create all tables
-    db.create_all()
-    print("Database tables initialized!")
 
 # User Model
 class User(db.Model):
